@@ -1,0 +1,22 @@
+# core
+torch>=2.2
+transformers>=4.43
+accelerate>=0.33
+datasets>=2.19
+peft>=0.11.1
+trl>=0.8.6
+bitsandbytes>=0.43.1
+safetensors>=0.4.3
+
+
+# logging & utils
+wandb>=0.17
+pyyaml>=6.0.1
+pandas>=2.2
+matplotlib>=3.8
+
+
+# evaluation (AlpacaEval 2 + FastChat judge + OpenAI)
+alpaca-eval>=0.7.3
+fastchat>=0.2.42
+openai>=1.46.0

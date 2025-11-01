@@ -1,0 +1,5 @@
+compute_environment: LOCAL_MACHINE
+distributed_type: NO
+mixed_precision: bf16
+device_placement: true
+downcast_bf16: no

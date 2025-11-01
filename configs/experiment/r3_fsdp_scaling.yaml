@@ -1,0 +1,39 @@
+base_model: meta-llama/Llama-2-7b-hf
+run_name: r3_fsdp_scaling
+output_dir: runs/r3_fsdp_scaling/checkpoints
+seed: 42
+
+quantization:
+  qlora_4bit: true
+  nf4: true
+  double_quant: true
+
+peft:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+train:
+  epochs: 1
+  max_seq_len: 1024
+  lr: 2.0e-4
+  weight_decay: 0.0
+  warmup_steps: 50
+  lr_schedule: cosine
+  per_device_batch_size: 1
+  grad_accum_steps: 4
+  gradient_checkpointing: true
+  logging_steps: 25
+  eval_strategy: epoch
+  save_strategy: epoch
+  bf16: true
+
+paths:
+  data_config: configs/experiment/data_dolly.yaml
+  history_csv: runs/r3_fsdp_scaling/logs/history.csv
+
+accelerate_config: configs/accelerate/fsdp_2gpu.yaml
+collect_metrics:
+  tokens_per_sec: true
+  step_time: true

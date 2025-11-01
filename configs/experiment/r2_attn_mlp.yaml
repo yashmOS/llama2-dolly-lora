@@ -1,0 +1,34 @@
+base_model: meta-llama/Llama-2-7b-hf
+run_name: r2_attn_mlp
+output_dir: runs/r2_attn_mlp/checkpoints
+seed: 42
+
+quantization:
+  qlora_4bit: true
+  nf4: true
+  double_quant: true
+
+peft:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+train:
+  epochs: 3
+  max_seq_len: 1024
+  lr: 2.0e-4
+  weight_decay: 0.0
+  warmup_steps: 200
+  lr_schedule: cosine
+  per_device_batch_size: 1
+  grad_accum_steps: 8
+  gradient_checkpointing: true
+  logging_steps: 25
+  eval_strategy: epoch
+  save_strategy: epoch
+  bf16: true
+
+paths:
+  data_config: configs/experiment/data_dolly.yaml
+  history_csv: runs/r2_attn_mlp/logs/history.csv

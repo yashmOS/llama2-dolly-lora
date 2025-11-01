@@ -1,0 +1,11 @@
+compute_environment: LOCAL_MACHINE
+distributed_type: FSDP
+fsdp_config:
+  sharding_strategy: 1  # FULL_SHARD
+  offload_params: false
+  backward_prefetch: 1
+  state_dict_type: 1
+  auto_wrap_policy: TRANSFORMER_BASED
+  use_orig_params: true
+mixed_precision: bf16
+num_processes: 2

@@ -1,0 +1,18 @@
+dataset: databricks/databricks-dolly-15k
+split:
+  train: 0.8
+  val: 0.1
+  test: 0.1
+  seed: 42
+# Training template — used by train scripts
+template: |
+  ### Instruction:
+  {instruction}
+
+  ### Context:
+  {context}
+
+  ### Response:
+  {response}
+filters:
+  drop_empty_response: true
