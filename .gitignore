@@ -4,7 +4,7 @@ __pycache__/
 *.egg-info/
 .venv/
 .env
-.env.*
+# .env.*
 
 
 # Runs & checkpoints
