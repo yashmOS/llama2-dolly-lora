@@ -1,11 +1,17 @@
 compute_environment: LOCAL_MACHINE
 distributed_type: FSDP
-fsdp_config:
-  sharding_strategy: 1  # FULL_SHARD
-  offload_params: false
-  backward_prefetch: 1
-  state_dict_type: 1
-  auto_wrap_policy: TRANSFORMER_BASED
-  use_orig_params: true
 mixed_precision: bf16
+num_machines: 1
 num_processes: 2
+machine_rank: 0
+gpu_ids: all
+fsdp_config:
+  sharding_strategy: 1                 # FULL_SHARD
+  state_dict_type: FULL_STATE_DICT
+  offload_params: false
+  cpu_ram_efficient_loading: true
+  auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  backward_prefetch_policy: BACKWARD_PRE
+  forward_prefetch: true
+  limit_all_gathers: true
+  activation_checkpointing: true

@@ -1,17 +1,51 @@
-import argparse, os, yaml, math, json
+import argparse, os, yaml, textwrap
 import torch
-from dataclasses import dataclass
-from typing import Dict, List
-
+from typing import Dict, Union, List
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig,
-    TrainingArguments
+    TrainingArguments, TrainerCallback
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+import csv
 
 
+# ----------------------------- Logging ---------------------------------
+class CSVLoggerCallback(TrainerCallback):
+    """Write live logs to CSV (runs/<run>/logs/history.csv)."""
+    def __init__(self, csv_path: str):
+        self.csv_path = csv_path
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+        self._file = open(csv_path, "w", newline="", encoding="utf-8")
+        self._writer = None
+        self._header = [
+            "step", "epoch", "loss", "eval_loss", "learning_rate", "grad_norm",
+            "train_runtime", "train_samples_per_second", "train_steps_per_second"
+        ]
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not logs:
+            return
+        if self._writer is None:
+            extras = [k for k in logs.keys() if k not in self._header]
+            self._header += extras
+            self._writer = csv.DictWriter(self._file, fieldnames=self._header)
+            self._writer.writeheader()
+        row = {k: logs.get(k, "") for k in self._header}
+        row["step"] = getattr(state, "global_step", row.get("step", ""))
+        row["epoch"] = getattr(state, "epoch", row.get("epoch", ""))
+        self._writer.writerow(row)
+        self._file.flush()
+
+    def on_train_end(self, *args, **kwargs):
+        try:
+            self._file.close()
+        except Exception:
+            pass
+
+
+# ----------------------------- Utilities --------------------------------
 def load_yaml(path):
     with open(path, "r") as f:
         return yaml.safe_load(f)
@@ -37,9 +71,51 @@ def format_example(ex: Dict[str, str], template: str) -> str:
     )
 
 
+def _strip_leading_ws_ids(tok, ids: List[int]) -> List[int]:
+    def _is_ws(tid: int) -> bool:
+        s = tok.decode([tid])
+        return s.strip() == ""
+    i = 0
+    while i < len(ids) and _is_ws(ids[i]):
+        i += 1
+    return ids[i:]
+
+
+def build_response_anchor(tok, normalized_template: str) -> Union[str, List[int]]:
+    """
+    Build a robust anchor for TRL's DataCollatorForCompletionOnlyLM:
+      1) Extract the exact label line before {response} (e.g., '### Response:').
+      2) Prepend a newline to mimic in-text context.
+      3) Tokenize and strip leading whitespace token IDs.
+      4) If result is empty (edge case), FALL BACK to string anchor '### Response:'.
+    Returns either a non-empty List[int] or the fallback string.
+    """
+    before_resp = normalized_template.split("{response}", 1)[0]
+    last_nl = before_resp.rfind("\n")
+    label_line = before_resp[last_nl + 1:] if last_nl != -1 else before_resp
+    # ensure it actually contains something human-readable like '### Response:'
+    if "Response:" not in label_line:
+        label_line = "### Response:\n"
+    elif not label_line.endswith("\n"):
+        label_line = label_line + "\n"
+
+    contextual = "\n" + label_line  # e.g., "\n### Response:\n"
+    ids = tok.encode(contextual, add_special_tokens=False)
+    ids = _strip_leading_ws_ids(tok, ids)
+
+    if len(ids) == 0:
+        # Fallback: string anchor is more forgiving than empty token list
+        return "### Response:"
+    return ids
+
+
+# ----------------------------- Main -------------------------------------
 def main(cfg_path: str):
     cfg = load_yaml(cfg_path)
     data_cfg = load_yaml(cfg["paths"]["data_config"])
+
+    # Normalize the YAML block to a consistent template
+    template = textwrap.dedent(data_cfg["template"]).lstrip("\n")
 
     # Tokenizer
     tok = AutoTokenizer.from_pretrained(cfg["base_model"], use_fast=True)
@@ -47,14 +123,17 @@ def main(cfg_path: str):
         tok.pad_token = tok.eos_token
     tok.padding_side = "right"
 
-    # Model
+    # Model (QLoRA 4-bit)
     bnb = build_bnb(cfg)
-    model = AutoModelForCausalLM.from_pretrained(
-        cfg["base_model"],
-        torch_dtype=torch.bfloat16 if cfg["train"].get("bf16", True) else torch.float16,
-        quantization_config=bnb,
-        device_map="auto",
-    )
+    dtype = torch.bfloat16 if cfg["train"].get("bf16", True) else torch.float16
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            cfg["base_model"], dtype=dtype, quantization_config=bnb, device_map="auto"
+        )
+    except TypeError:
+        model = AutoModelForCausalLM.from_pretrained(
+            cfg["base_model"], torch_dtype=dtype, quantization_config=bnb, device_map="auto"
+        )
     model.config.use_cache = False  # important for grad checkpointing
     if bnb is not None:
         model = prepare_model_for_kbit_training(model)
@@ -70,31 +149,23 @@ def main(cfg_path: str):
     model = get_peft_model(model, lora)
 
     # Datasets (processed JSONL)
-    data_files = {
-        "train": "data/processed/train.jsonl",
-        "validation": "data/processed/val.jsonl",
-    }
+    data_files = {"train": "data/processed/train.jsonl", "validation": "data/processed/val.jsonl"}
     ds = load_dataset("json", data_files=data_files)
 
-    template = data_cfg["template"]
+    def to_text(example):
+        return {"text": format_example(example, template)}
 
-    def fmt(batch):
-        return {
-            "text": [format_example(ex, template) for ex in batch]
-        }
+    train_text = ds["train"].map(to_text, remove_columns=ds["train"].column_names)
+    val_text   = ds["validation"].map(to_text, remove_columns=ds["validation"].column_names)
 
-    # Map to a single "text" field
-    train_text = ds["train"].map(fmt, batched=False)
-    val_text = ds["validation"].map(fmt, batched=False)
-
-    # Only compute loss on the response portion
-    response_template = "### Response:"
+    # Robust anchor for response-only loss
+    response_template = build_response_anchor(tok, template)
     collator = DataCollatorForCompletionOnlyLM(
-        response_template=response_template,
+        response_template=response_template,  # accepts List[int] or str
         tokenizer=tok,
     )
 
-    # Training args
+    # Training args (stable optimizer for QLoRA; gradient clipping)
     ta = TrainingArguments(
         output_dir=cfg["output_dir"],
         num_train_epochs=cfg["train"]["epochs"],
@@ -111,8 +182,10 @@ def main(cfg_path: str):
         evaluation_strategy=cfg["train"]["eval_strategy"],
         save_strategy=cfg["train"]["save_strategy"],
         save_total_limit=2,
-        report_to=["wandb"],
+        report_to=["wandb"] if os.environ.get("WANDB_MODE", "online") != "disabled" else [],
         run_name=cfg["run_name"],
+        optim="paged_adamw_8bit",
+        max_grad_norm=0.3,
     )
 
     trainer = SFTTrainer(
@@ -126,21 +199,15 @@ def main(cfg_path: str):
         data_collator=collator,
         args=ta,
     )
+    trainer.add_callback(CSVLoggerCallback(cfg["paths"]["history_csv"]))
 
-    out = trainer.train()
+    trainer.train()
 
-    # Save PEFT adapter (best checkpoint dir mirrors HF)
+    # Save PEFT adapter + tokenizer
     os.makedirs(cfg["output_dir"], exist_ok=True)
     trainer.model.save_pretrained(os.path.join(cfg["output_dir"], "best"))
     trainer.tokenizer.save_pretrained(os.path.join(cfg["output_dir"], "best"))
-
-    # Dump training history to CSV for plotting later
-    hist = trainer.state.log_history
-    os.makedirs(os.path.dirname(cfg["paths"]["history_csv"]), exist_ok=True)
-    import pandas as pd
-    pd.DataFrame(hist).to_csv(cfg["paths"]["history_csv"], index=False)
-
-    print("Training complete. History saved to:", cfg["paths"]["history_csv"])
+    print("Training complete. Live CSV at:", cfg["paths"]["history_csv"])
 
 
 if __name__ == "__main__":

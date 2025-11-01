@@ -1,6 +1,7 @@
 import argparse, json, os, random, yaml
 from datasets import load_dataset
 
+MAX_CTX_CHARS = 800
 
 def main(cfg_path: str):
     with open(cfg_path, "r") as f:
@@ -18,6 +19,7 @@ def main(cfg_path: str):
     for ex in ds:
         instr = (ex.get("instruction") or "").strip()
         ctx = (ex.get("context") or "").strip()
+        ctx = ctx[:MAX_CTX_CHARS]
         resp = (ex.get("response") or "").strip()
         if cfg.get("filters", {}).get("drop_empty_response", True) and (not resp):
             continue

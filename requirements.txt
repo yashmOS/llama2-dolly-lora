@@ -1,10 +1,10 @@
 # core
 torch>=2.2
-transformers>=4.43
-accelerate>=0.33
-datasets>=2.19
-peft>=0.11.1
-trl>=0.8.6
+transformers==4.44.2
+accelerate==0.33.0
+datasets==2.19.0
+peft==0.11.1
+trl==0.9.6
 bitsandbytes>=0.43.1
 safetensors>=0.4.3
 
