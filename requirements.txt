@@ -17,6 +17,6 @@ matplotlib>=3.8
 
 
 # evaluation (AlpacaEval 2 + FastChat judge + OpenAI)
-alpaca-eval>=0.7.3
-fastchat>=0.2.42
+alpaca-eval==0.6.6
+fschat>=0.2.36
 openai>=1.46.0

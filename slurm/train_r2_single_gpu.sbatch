@@ -5,10 +5,11 @@
 #SBATCH --time=2-00:00:00
 #SBATCH --output=runs/r2_attn_mlp/slurm.out
 
-source ~/.bashrc
-conda activate YOUR_ENV
-export HF_TOKEN=${HF_TOKEN}
-export WANDB_PROJECT=llama2-dolly
+source ~/project/llama2-dolly-lora/.venv/bin/activate
+if [ -f ~/project/llama2-dolly-lora/.env ]; then
+  set -a; source ~/project/llama2-dolly-lora/.env; set +a
+fi
+export WANDB_PROJECT=${WANDB_PROJECT:-llama2-dolly}
 
 accelerate launch --config_file configs/accelerate/single_gpu.yaml \
   scripts/train_lora.py --config configs/experiment/r2_attn_mlp.yaml
