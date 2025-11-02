@@ -4,9 +4,9 @@ output_dir: runs/r3_fsdp_scaling/checkpoints
 seed: 42
 
 quantization:
-  qlora_4bit: true
-  nf4: true
-  double_quant: true
+  qlora_4bit: false
+  nf4: false
+  double_quant: false
 
 peft:
   r: 8
@@ -16,18 +16,22 @@ peft:
 
 train:
   epochs: 1
-  max_seq_len: 2048
+  max_seq_len: 1536
   lr: 2.0e-4
   weight_decay: 0.0
   warmup_steps: 50
   lr_schedule: cosine
   per_device_batch_size: 1
-  grad_accum_steps: 4
-  gradient_checkpointing: true
+  grad_accum_steps: 8
+  gradient_checkpointing: false
   logging_steps: 25
   eval_strategy: epoch
   save_strategy: epoch
-  bf16: true
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: eval_loss
+  greater_is_better: false
+  bf16: false
 
 paths:
   data_config: configs/experiment/data_dolly.yaml

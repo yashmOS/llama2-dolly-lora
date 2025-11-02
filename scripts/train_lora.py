@@ -10,6 +10,11 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 import csv
 
+# if torch.cuda.is_available():
+#     if "LOCAL_RANK" in os.environ:            # Accelerate/DDP per-rank
+#         torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+#     else:                                      # single-GPU or non-DDP
+#         torch.cuda.set_device(0)
 
 # ----------------------------- Logging ---------------------------------
 class CSVLoggerCallback(TrainerCallback):
@@ -55,11 +60,12 @@ def build_bnb(cfg):
     q = cfg["quantization"]
     if not q.get("qlora_4bit", True):
         return None
+    bnb_4bit_compute_dtype = torch.bfloat16 if cfg["train"].get("bf16", True) else torch.float16
     return BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_use_double_quant=q.get("double_quant", True),
         bnb_4bit_quant_type="nf4" if q.get("nf4", True) else "fp4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_compute_dtype=bnb_4bit_compute_dtype,
     )
 
 
@@ -126,13 +132,35 @@ def main(cfg_path: str):
     # Model (QLoRA 4-bit)
     bnb = build_bnb(cfg)
     dtype = torch.bfloat16 if cfg["train"].get("bf16", True) else torch.float16
+
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    # Only set device_map for multi-GPU + QLoRA (bitsandbytes) runs.
+    # QLoRA per-rank device mapping (DDP only)
+    device_map = None
+    if world_size > 1 and bnb is not None:
+        device_map = {"": local_rank}
+
+    # ensure CUDA device is bound before TrainingArguments BF16 probe
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+        _ = torch.cuda.current_device() 
+
     try:
         model = AutoModelForCausalLM.from_pretrained(
-            cfg["base_model"], dtype=dtype, quantization_config=bnb, device_map="auto"
+            cfg["base_model"],
+            dtype=dtype,
+            quantization_config=bnb,
+            device_map=device_map,
+            low_cpu_mem_usage=True,
         )
     except TypeError:
         model = AutoModelForCausalLM.from_pretrained(
-            cfg["base_model"], torch_dtype=dtype, quantization_config=bnb, device_map="auto"
+            cfg["base_model"],
+            torch_dtype=dtype,
+            quantization_config=bnb,
+            device_map=device_map,
+            low_cpu_mem_usage=True,
         )
     model.config.use_cache = False  # important for grad checkpointing
     if bnb is not None:
@@ -181,11 +209,15 @@ def main(cfg_path: str):
         gradient_checkpointing=cfg["train"].get("gradient_checkpointing", True),
         evaluation_strategy=cfg["train"]["eval_strategy"],
         save_strategy=cfg["train"]["save_strategy"],
-        save_total_limit=2,
+        save_total_limit=3,
         report_to=["wandb"] if os.environ.get("WANDB_MODE", "online") != "disabled" else [],
         run_name=cfg["run_name"],
         optim="paged_adamw_8bit",
         max_grad_norm=0.3,
+        ddp_find_unused_parameters=False,
+        load_best_model_at_end=cfg["train"].get("load_best_model_at_end", True),
+        metric_for_best_model=cfg["train"].get("metric_for_best_model", "eval_loss"),
+        greater_is_better=cfg["train"].get("greater_is_better", False),
     )
 
     trainer = SFTTrainer(

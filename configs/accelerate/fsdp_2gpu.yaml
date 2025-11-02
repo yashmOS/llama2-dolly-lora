@@ -1,17 +1,33 @@
+# Accelerate config for 2-GPU FSDP on SoC cluster
 compute_environment: LOCAL_MACHINE
 distributed_type: FSDP
-mixed_precision: bf16
+
 num_machines: 1
 num_processes: 2
 machine_rank: 0
-gpu_ids: all
+same_network: true
+rdzv_backend: static
+use_cpu: false
+
+# Prefer bf16 on H100/A100
+mixed_precision: bf16
+downcast_bf16: "no"
+
+# FSDP plugin/options (Accelerate 0.33.x)
 fsdp_config:
-  sharding_strategy: 1                 # FULL_SHARD
-  state_dict_type: FULL_STATE_DICT
-  offload_params: false
-  cpu_ram_efficient_loading: true
-  auto_wrap_policy: TRANSFORMER_BASED_WRAP
-  backward_prefetch_policy: BACKWARD_PRE
-  forward_prefetch: true
+  # Wrap transformer layers automatically (works for LLaMA)
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_transformer_layer_cls_to_wrap: LlamaDecoderLayer
+
+  # Sharding/SD options
+  fsdp_sharding_strategy: FULL_SHARD          # FULL_SHARD is fine for 2x H100
+  fsdp_state_dict_type: FULL_STATE_DICT       # full SD for easy save/load
+  state_dict_offload: true
+  cpu_offload: true
   limit_all_gathers: true
+  sync_module_states: true
+  use_orig_params: true
+
+  # Checkpointing: for FSDP
   activation_checkpointing: true
+  fsdp_backward_prefetch: BACKWARD_PRE
